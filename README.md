@@ -161,6 +161,22 @@ Before submitting, verify multi-turn context retention with this test flow:
 
 ---
 
+## 🌐 Free Cloud Deployment (Render / Railway)
+
+### Option 1: Deploy on Render (Recommended, Free)
+1. Push your repository to **GitHub**.
+2. Go to [Render.com](https://render.com) and create a free account.
+3. Click **New +** -> **Web Service** -> Connect your GitHub repo.
+4. Render will auto-detect Python and the included `render.yaml` / `Procfile`:
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+5. In the **Environment Variables** section, add:
+   - `GEMINI_API_KEY`: *(paste your real Google AI Studio key)*
+   - `GEMINI_MODEL`: `gemini-3.5-flash-lite`
+6. Click **Deploy Web Service**. In ~2 minutes, your live public chatbot URL will be active!
+
+---
+
 ## 📤 Git Submission Steps
 
 ```bash
