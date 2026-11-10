@@ -1,13 +1,17 @@
 import os
 import uuid
+import warnings
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from dotenv import load_dotenv
+from env_loader import load_env
 from google import genai
 from google.genai import types, errors
 
-# Load environment variables from .env file
-load_dotenv()
+# Suppress harmless SDK warnings
+warnings.filterwarnings("ignore")
+
+# Load environment variables
+load_env()
 
 # System Prompt defining the bot's persona and constraints
 SYSTEM_PROMPT = """You are Nova, an upbeat, sharp, and encouraging software engineering mentor.
@@ -18,7 +22,8 @@ Your characteristics:
 4. Memory: You remember details shared earlier in the conversation (names, preferences, code snippets).
 """
 
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_MAX_CONTEXT = int(os.getenv("MAX_CONTEXT_MESSAGES", "10"))
 
 
@@ -35,7 +40,8 @@ class GeminiChatbot:
         max_context_messages: int = DEFAULT_MAX_CONTEXT,
         system_instruction: str = SYSTEM_PROMPT,
     ):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "").strip()
+        load_env()
+        self.api_key = (api_key if api_key is not None else os.getenv("GEMINI_API_KEY", "")).strip()
         self.model_name = model_name
         self.max_context_messages = max_context_messages
         self.system_instruction = system_instruction
@@ -45,7 +51,6 @@ class GeminiChatbot:
             self.client = genai.Client(api_key=self.api_key)
 
         # In-memory session store: conversation_id -> list of message dicts
-        # Each message dict: {"role": "user" | "model", "text": str, "timestamp": str}
         self.conversations: Dict[str, List[Dict[str, str]]] = {}
 
     def is_configured(self) -> bool:
@@ -91,12 +96,10 @@ class GeminiChatbot:
             selected_history = list(history)
             was_truncated = False
         else:
-            # Take the most recent N messages
             selected_history = history[-self.max_context_messages:]
             was_truncated = True
 
         # Gemini multi-turn content must start with a 'user' turn.
-        # If truncation caused the window to start with a 'model' turn, drop it.
         while selected_history and selected_history[0]["role"] != "user":
             selected_history.pop(0)
 
@@ -146,18 +149,29 @@ class GeminiChatbot:
         contents, was_truncated, context_count = self._prepare_context(conv_id)
 
         # 3. Call Gemini API with system instruction & robust error handling
-        try:
-            config = types.GenerateContentConfig(
-                system_instruction=self.system_instruction,
-                max_output_tokens=1024,
-                temperature=0.7,
-            )
+        config = types.GenerateContentConfig(
+            system_instruction=self.system_instruction,
+            max_output_tokens=1024,
+            temperature=0.7,
+        )
 
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=contents,
-                config=config,
-            )
+        try:
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config,
+                )
+            except errors.APIError as api_err:
+                # If model is deprecated (404) or overloaded (503), try fallback
+                if self.model_name != FALLBACK_MODEL and (getattr(api_err, "code", None) in (404, 503) or "NOT_FOUND" in str(api_err)):
+                    response = self.client.models.generate_content(
+                        model=FALLBACK_MODEL,
+                        contents=contents,
+                        config=config,
+                    )
+                else:
+                    raise api_err
 
             reply_text = response.text or "I heard you, but I didn't generate any text response."
 
@@ -178,7 +192,6 @@ class GeminiChatbot:
             }
 
         except errors.APIError as e:
-            # Revert the unfulfilled user message or keep it? We keep it or leave as is.
             error_message = self._format_api_error(e)
             return {
                 "success": False,
